@@ -6,7 +6,7 @@
   task:
     agent:
       machine:
-        type: e1-standard-4
+        type: f1-standard-2
         os_image: ubuntu2004
     prologue:
       commands:
@@ -100,7 +100,7 @@
       - name: private-repo
     prologue:
       commands:
-        - export REPORT_DIR=/home/semaphore/calico/process/testing/winfv/report
+        - export REPORT_DIR=/home/semaphore/report
         - export AZURE_SUBSCRIPTION_ID=$AZ_SUBSCRIPTION_ID
         - export AZURE_TENANT_ID=$AZ_TENANT_ID
         - export AZURE_CLIENT_ID=$AZ_SP_ID
