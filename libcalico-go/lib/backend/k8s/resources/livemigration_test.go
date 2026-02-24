@@ -293,11 +293,12 @@ var _ = Describe("LiveMigrationClient", func() {
 			_, err = kvFake.KubevirtV1().VirtualMachineInstanceMigrations("test-ns").Update(ctx, vmimUpdated, metav1.UpdateOptions{})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Second event should be Deleted.
+			// Second event should be Modified with nil value.
 			select {
 			case event := <-w.ResultChan():
 				Expect(event.Error).NotTo(HaveOccurred())
-				Expect(event.Type).To(Equal(api.WatchDeleted))
+				Expect(event.Type).To(Equal(api.WatchModified))
+				Expect(event.New.Value).To(BeNil())
 			case <-timer.C:
 				Fail("expected Deleted event before timer expired")
 			}
@@ -320,17 +321,146 @@ var _ = Describe("LiveMigrationClient", func() {
 			_, err = kvFake.KubevirtV1().VirtualMachineInstanceMigrations("test-ns").Create(ctx, vmim, metav1.CreateOptions{})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Should not receive any event.
+			// Expect an Added event but with nil value.
 			timer := time.NewTimer(200 * time.Millisecond)
 			defer timer.Stop()
 			select {
 			case event := <-w.ResultChan():
-				Fail(fmt.Sprintf("unexpected watch event: %v", event))
+				Expect(event.Error).NotTo(HaveOccurred())
+				Expect(event.Type).To(Equal(api.WatchAdded))
+				Expect(event.New.Value).To(BeNil())
 			case <-timer.C:
 				// Expected: no event received.
 			}
 
 			w.Stop()
+		})
+
+		Context("typical VMIM progressions", func() {
+			var (
+				kvFake                  *kubevirtfake.Clientset
+				vmim                    *kubevirtv1.VirtualMachineInstanceMigration
+				w                       api.WatchInterface
+				err                     error
+				expectLiveMigration     func()
+				expectEventWithNilValue func(api.WatchEventType)
+			)
+
+			BeforeEach(func() {
+				kvFake = kubevirtfake.NewSimpleClientset()
+
+				client := newLiveMigrationClient(kvFake)
+				w, err = client.Watch(ctx, model.ResourceListOptions{
+					Namespace: "test-ns",
+					Kind:      internalapi.KindLiveMigration,
+				}, api.WatchOptions{})
+				Expect(err).NotTo(HaveOccurred())
+
+				expectAndCheckEvent := func(check func(api.WatchEvent)) {
+					timer := time.NewTimer(200 * time.Millisecond)
+					defer timer.Stop()
+					select {
+					case event := <-w.ResultChan():
+						if check != nil {
+							check(event)
+						} else {
+							Expect(event).To(BeNil())
+						}
+					case <-timer.C:
+						if check != nil {
+							Fail("expected to get watch event")
+						}
+						// Else as expected: no event received.
+					}
+				}
+
+				expectLiveMigration = func() {
+					expectAndCheckEvent(func(e api.WatchEvent) {
+						Expect(e.Type).To(Equal(api.WatchModified))
+						Expect(e.New).NotTo(BeNil())
+						Expect(e.New.Value).To(BeAssignableToTypeOf(&internalapi.LiveMigration{}))
+						lm := e.New.Value.(*internalapi.LiveMigration)
+						Expect(lm.Spec.Source.Namespace).To(Equal("test-ns"))
+						Expect(lm.Spec.Source.Name).To(Equal("virt-launcher-vm12-snq7w"))
+						Expect(lm.Spec.Destination.NamespacedName).To(BeNil())
+						Expect(*lm.Spec.Destination.Selector).To(Equal("kubevirt.io/vmi-name == 'vm12' && kubevirt.io/migrationJobUID == 'c05275a7-f85b-42d5-a1d0-acdd49c26d57'"))
+					})
+				}
+
+				expectEventWithNilValue = func(expectedEventType api.WatchEventType) {
+					expectAndCheckEvent(func(e api.WatchEvent) {
+						Expect(e.Type).To(Equal(expectedEventType))
+						Expect(e.New).NotTo(BeNil())
+						Expect(e.New.Value).To(BeNil())
+					})
+				}
+
+				// Simulate the sequence of VMIM states that we have seen in actual
+				// usage with KubeVirt, and check the resulting sequence of
+				// LiveMigration events and contents.
+
+				By("Pending")
+				vmim = newVMIM("test-ns", "vmim-progression", "400", kubevirtv1.MigrationPending, "vm12", "virt-launcher-vm12-snq7w", "c05275a7-f85b-42d5-a1d0-acdd49c26d57")
+				vmim, err = kvFake.KubevirtV1().VirtualMachineInstanceMigrations("test-ns").Create(ctx, vmim, metav1.CreateOptions{})
+				Expect(err).NotTo(HaveOccurred())
+				expectEventWithNilValue(api.WatchAdded)
+
+				By("Scheduling")
+				vmim.Status.Phase = kubevirtv1.MigrationScheduled
+				vmim, err = kvFake.KubevirtV1().VirtualMachineInstanceMigrations("test-ns").Update(ctx, vmim, metav1.UpdateOptions{})
+				Expect(err).NotTo(HaveOccurred())
+				expectEventWithNilValue(api.WatchModified)
+
+				By("PreparingTarget")
+				vmim.Status.Phase = kubevirtv1.MigrationPreparingTarget
+				vmim, err = kvFake.KubevirtV1().VirtualMachineInstanceMigrations("test-ns").Update(ctx, vmim, metav1.UpdateOptions{})
+				Expect(err).NotTo(HaveOccurred())
+				expectEventWithNilValue(api.WatchModified)
+
+				By("TargetReady")
+				vmim.Status.Phase = kubevirtv1.MigrationTargetReady
+				vmim, err = kvFake.KubevirtV1().VirtualMachineInstanceMigrations("test-ns").Update(ctx, vmim, metav1.UpdateOptions{})
+				Expect(err).NotTo(HaveOccurred())
+				expectLiveMigration()
+
+				By("Running")
+				vmim.Status.Phase = kubevirtv1.MigrationRunning
+				vmim, err = kvFake.KubevirtV1().VirtualMachineInstanceMigrations("test-ns").Update(ctx, vmim, metav1.UpdateOptions{})
+				Expect(err).NotTo(HaveOccurred())
+				expectLiveMigration()
+			})
+
+			AfterEach(func() {
+				w.Stop()
+			})
+
+			It("emits LiveMigrations as expected when migration succeeds ", func() {
+				By("Succeeded")
+				vmim.Status.Phase = kubevirtv1.MigrationSucceeded
+				vmim, err = kvFake.KubevirtV1().VirtualMachineInstanceMigrations("test-ns").Update(ctx, vmim, metav1.UpdateOptions{})
+				Expect(err).NotTo(HaveOccurred())
+				expectEventWithNilValue(api.WatchModified)
+			})
+
+			It("emits LiveMigrations as expected when migration fails ", func() {
+				By("Failed")
+				vmim.Status.Phase = kubevirtv1.MigrationFailed
+				vmim, err = kvFake.KubevirtV1().VirtualMachineInstanceMigrations("test-ns").Update(ctx, vmim, metav1.UpdateOptions{})
+				Expect(err).NotTo(HaveOccurred())
+				// Note, in this case the LiveMigration continues to exist so as to
+				// maintain the existing routing for the target pod, until the
+				// target pod is cleaned up.  In most failure cases this means
+				// continuing the state of Felix not programming a route at all for
+				// the target pod.  (On the other hand, if the LiveMigration was
+				// deleted at this point, Felix _would_ program a route for the
+				// target pod.)  If there are cases where live migration fails
+				// _after_ the target pod has become live - which means that Felix
+				// has programmed a higher priority route for the target pod - then
+				// we will probably want to enhance LiveMigration to indicate a
+				// failure at that point, and make Felix respond to that by removing
+				// the target pod route.
+				expectLiveMigration()
+			})
 		})
 	})
 
