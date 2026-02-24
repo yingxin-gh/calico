@@ -145,8 +145,10 @@ func (c *LiveMigrationClient) EnsureInitialized() error {
 	return nil
 }
 
-// vmimShouldEmitLiveMigration returns true if the VMIM is in a phase that
-// warrants emitting a LiveMigration resource and has the required fields set.
+// vmimShouldEmitLiveMigration returns true if the VMIM is in a phase that warrants emitting a
+// LiveMigration resource and has the required fields set.  In more detail: only if the migration is
+// actively preparing, running, or failing, and we have the VM Name, Source Pod, and Object UID
+// established.
 func vmimShouldEmitLiveMigration(vmim *kubevirtv1.VirtualMachineInstanceMigration) bool {
 	switch vmim.Status.Phase {
 	case kubevirtv1.MigrationTargetReady, kubevirtv1.MigrationRunning, kubevirtv1.MigrationFailed:
@@ -169,8 +171,11 @@ func vmimShouldEmitLiveMigration(vmim *kubevirtv1.VirtualMachineInstanceMigratio
 // The caller must ensure the VMIM has the required fields (see vmimShouldEmitLiveMigration).
 func convertVMIMToLiveMigrationSpec(vmim *kubevirtv1.VirtualMachineInstanceMigration) internalapi.LiveMigrationSpec {
 	selector := fmt.Sprintf(
-		"kubevirt.io/vmi-name == '%s' && kubevirt.io/migrationJobUID == '%s'",
-		vmim.Spec.VMIName, string(vmim.UID),
+		"%s == '%s' && %s == '%s'",
+		kubevirtv1.MigrationSelectorLabel,
+		vmim.Spec.VMIName,
+		kubevirtv1.MigrationJobLabel,
+		string(vmim.UID),
 	)
 	return internalapi.LiveMigrationSpec{
 		Source: &types.NamespacedName{
