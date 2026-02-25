@@ -35,6 +35,7 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth" // Import all auth providers.
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	kubevirtclient "kubevirt.io/client-go/kubevirt/typed/core/v1"
 	netpolicyclient "sigs.k8s.io/network-policy-api/pkg/client/clientset/versioned/typed/apis/v1alpha2"
 
 	"github.com/projectcalico/calico/libcalico-go/lib/apiconfig"
@@ -234,6 +235,18 @@ func NewKubeClient(ca *apiconfig.CalicoAPIConfigSpec) (api.Client, error) {
 
 	// These resources are backed directly by core Kubernetes APIs or third-party
 	// APIs, and do not use CRDs.
+	kvClient, err := kubevirtclient.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build KubeVirt client: %v", err)
+	}
+	c.registerResourceClient(
+		reflect.TypeOf(model.ResourceKey{}),
+		reflect.TypeOf(model.ResourceListOptions{}),
+		internalapi.KindLiveMigration,
+		resources.NewLiveMigrationClient(func(namespace string) resources.VMIMClient {
+			return kvClient.VirtualMachineInstanceMigrations(namespace)
+		}),
+	)
 	c.registerResourceClient(
 		reflect.TypeFor[model.ResourceKey](),
 		reflect.TypeFor[model.ResourceListOptions](),
@@ -431,12 +444,6 @@ func (c *KubeClient) registerResourceClient(keyType, listType reflect.Type, reso
 		c.clientsByKeyType[keyType] = client
 		c.clientsByListType[listType] = client
 	}
-}
-
-// RegisterResourceClient is an exported equivalent of registerResourceClient for use by
-// kubevirt.Enable().
-func (c *KubeClient) RegisterResourceClient(keyType, listType reflect.Type, resourceKind string, client resources.K8sResourceClient) {
-	c.registerResourceClient(keyType, listType, resourceKind, client)
 }
 
 // getResourceClientFromKey returns the appropriate resource client for the v3 resource kind.
