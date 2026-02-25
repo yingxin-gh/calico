@@ -493,7 +493,9 @@ func (tc *testConn) tryLoopFile(loopFile string, logPongs bool, timeout, sleep t
 			if ls.loopFile != "" {
 				if _, statErr := os.Stat(ls.loopFile); statErr == nil {
 					log.WithError(err).Info("Connection error during shutdown, exiting cleanly")
-					os.Remove(ls.loopFile)
+					if rmErr := os.Remove(ls.loopFile); rmErr != nil {
+						log.WithError(rmErr).Info("Failed to remove loop file during shutdown")
+					}
 					break
 				}
 			}
