@@ -105,13 +105,34 @@ Runs functional tests from `fv/`. Requires container images to be built first. `
 
 ### BPF-Specific Tests
 
+#### Building BPF Programs
+
+After modifying C code in `bpf-gpl/`, verify it compiles for all targets (IPv4, IPv6, all hook types):
+
+```bash
+make build-bpf
+```
+
+Run `make clean` first if you hit stale object issues. Use `make -C felix build` to verify both BPF C and Go code compile together.
+
+#### BPF Unit Tests
+
 BPF unit tests run the BPF dataplane programs in a privileged container:
 
 ```bash
-make FOCUS="TestName" ut-bpf
+make ut-bpf                          # Run all BPF unit tests (~2000 tests)
+make FOCUS="TestName" ut-bpf         # Run specific test by name
+make FOCUS="TestNatEncap" ut-bpf     # Example: VXLAN encap/decap tests
+make FOCUS="TestNATPodPodXNode" ut-bpf  # Example: cross-node NAT tests
 ```
 
-Runs BPF unit tests from `bpf/ut/`. `FOCUS` filters by test name.
+`FOCUS` filters by Go test function name (supports regex). Each test function typically has multiple sub-tests exercising different BPF programs (ingress/egress, different interface types).
+
+`TestPrecompiledBinariesAreLoadable` verifies that all compiled BPF programs pass the kernel verifier on the local machine. Always run this after modifying BPF C code to catch verifier rejections early:
+
+```bash
+make FOCUS="TestPrecompiledBinariesAreLoadable" ut-bpf
+```
 
 BPF functional tests run the standard FV suite with the BPF dataplane enabled:
 
