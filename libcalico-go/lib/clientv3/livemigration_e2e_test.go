@@ -28,7 +28,6 @@ import (
 	"github.com/projectcalico/calico/libcalico-go/lib/clientv3"
 	"github.com/projectcalico/calico/libcalico-go/lib/options"
 	"github.com/projectcalico/calico/libcalico-go/lib/testutils"
-	"github.com/projectcalico/calico/libcalico-go/lib/watch"
 )
 
 var _ = testutils.E2eDatastoreDescribe("LiveMigration tests", testutils.DatastoreEtcdV3, func(config apiconfig.CalicoAPIConfig) {
@@ -222,7 +221,7 @@ var _ = testutils.E2eDatastoreDescribe("LiveMigration tests", testutils.Datastor
 	)
 
 	Describe("LiveMigration watch functionality", func() {
-		It("should handle watch events for different resource versions and event types", func() {
+		It("should return an error for an attempted Watch", func() {
 			c, err := clientv3.New(config)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -234,9 +233,8 @@ var _ = testutils.E2eDatastoreDescribe("LiveMigration tests", testutils.Datastor
 			outList, outError := c.LiveMigrations().List(ctx, options.ListOptions{})
 			Expect(outError).NotTo(HaveOccurred())
 			Expect(outList.Items).To(HaveLen(0))
-			rev0 := outList.ResourceVersion
 
-			By("Configuring a LiveMigration namespace1/name1/spec1 and storing the response")
+			By("Configuring a LiveMigration namespace1/name1/spec1")
 			outRes1, err := c.LiveMigrations().Create(
 				ctx,
 				&internalapi.LiveMigration{
@@ -248,8 +246,8 @@ var _ = testutils.E2eDatastoreDescribe("LiveMigration tests", testutils.Datastor
 			rev1 := outRes1.ResourceVersion
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Configuring a LiveMigration namespace2/name2/spec2 and storing the response")
-			outRes2, err := c.LiveMigrations().Create(
+			By("Configuring a LiveMigration namespace2/name2/spec2")
+			_, err = c.LiveMigrations().Create(
 				ctx,
 				&internalapi.LiveMigration{
 					ObjectMeta: metav1.ObjectMeta{Namespace: namespace2, Name: name2},
@@ -259,112 +257,9 @@ var _ = testutils.E2eDatastoreDescribe("LiveMigration tests", testutils.Datastor
 			)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Starting a watcher from revision rev1 - this should skip the first creation")
-			w, err := c.LiveMigrations().Watch(ctx, options.ListOptions{ResourceVersion: rev1})
-			Expect(err).NotTo(HaveOccurred())
-			testWatcher1 := testutils.NewTestResourceWatch(config.Spec.DatastoreType, w)
-			defer testWatcher1.Stop()
-
-			By("Deleting res1")
-			_, err = c.LiveMigrations().Delete(ctx, namespace1, name1, options.DeleteOptions{})
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Checking for two events, create res2 and delete res1")
-			testWatcher1.ExpectEvents(internalapi.KindLiveMigration, []watch.Event{
-				{
-					Type:   watch.Added,
-					Object: outRes2,
-				},
-				{
-					Type:     watch.Deleted,
-					Previous: outRes1,
-				},
-			})
-			testWatcher1.Stop()
-
-			By("Starting a watcher from rev0 - this should get all events")
-			w, err = c.LiveMigrations().Watch(ctx, options.ListOptions{ResourceVersion: rev0})
-			Expect(err).NotTo(HaveOccurred())
-			testWatcher2 := testutils.NewTestResourceWatch(config.Spec.DatastoreType, w)
-			defer testWatcher2.Stop()
-
-			By("Modifying res2")
-			outRes3, err := c.LiveMigrations().Update(
-				ctx,
-				&internalapi.LiveMigration{
-					ObjectMeta: outRes2.ObjectMeta,
-					Spec:       spec1,
-				},
-				options.SetOptions{},
-			)
-			Expect(err).NotTo(HaveOccurred())
-			testWatcher2.ExpectEvents(internalapi.KindLiveMigration, []watch.Event{
-				{
-					Type:   watch.Added,
-					Object: outRes1,
-				},
-				{
-					Type:   watch.Added,
-					Object: outRes2,
-				},
-				{
-					Type:     watch.Deleted,
-					Previous: outRes1,
-				},
-				{
-					Type:     watch.Modified,
-					Previous: outRes2,
-					Object:   outRes3,
-				},
-			})
-			testWatcher2.Stop()
-
-			By("Starting a watcher from rev0 watching name1 - this should get all events for name1")
-			w, err = c.LiveMigrations().Watch(ctx, options.ListOptions{Namespace: namespace1, Name: name1, ResourceVersion: rev0})
-			Expect(err).NotTo(HaveOccurred())
-			testWatcher2_1 := testutils.NewTestResourceWatch(config.Spec.DatastoreType, w)
-			defer testWatcher2_1.Stop()
-			testWatcher2_1.ExpectEvents(internalapi.KindLiveMigration, []watch.Event{
-				{
-					Type:   watch.Added,
-					Object: outRes1,
-				},
-				{
-					Type:     watch.Deleted,
-					Previous: outRes1,
-				},
-			})
-			testWatcher2_1.Stop()
-
-			By("Starting a watcher not specifying a rev - expect the current snapshot")
-			w, err = c.LiveMigrations().Watch(ctx, options.ListOptions{})
-			Expect(err).NotTo(HaveOccurred())
-			testWatcher3 := testutils.NewTestResourceWatch(config.Spec.DatastoreType, w)
-			defer testWatcher3.Stop()
-			testWatcher3.ExpectEvents(internalapi.KindLiveMigration, []watch.Event{
-				{
-					Type:   watch.Added,
-					Object: outRes3,
-				},
-			})
-			testWatcher3.Stop()
-
-			By("Starting a watcher at rev0 in namespace1 - expect the events for LiveMigration in namespace1")
-			w, err = c.LiveMigrations().Watch(ctx, options.ListOptions{Namespace: namespace1, ResourceVersion: rev0})
-			Expect(err).NotTo(HaveOccurred())
-			testWatcher4 := testutils.NewTestResourceWatch(config.Spec.DatastoreType, w)
-			defer testWatcher4.Stop()
-			testWatcher4.ExpectEvents(internalapi.KindLiveMigration, []watch.Event{
-				{
-					Type:   watch.Added,
-					Object: outRes1,
-				},
-				{
-					Type:     watch.Deleted,
-					Previous: outRes1,
-				},
-			})
-			testWatcher4.Stop()
+			By("Starting a watcher from revision rev1 - should return an error")
+			_, err = c.LiveMigrations().Watch(ctx, options.ListOptions{ResourceVersion: rev1})
+			Expect(err).To(HaveOccurred())
 		})
 	})
 })
