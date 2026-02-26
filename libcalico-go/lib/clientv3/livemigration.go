@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/projectcalico/calico/libcalico-go/lib/apis/internalapi"
+	cerrors "github.com/projectcalico/calico/libcalico-go/lib/errors"
 	"github.com/projectcalico/calico/libcalico-go/lib/options"
 	validator "github.com/projectcalico/calico/libcalico-go/lib/validator/v3"
 	"github.com/projectcalico/calico/libcalico-go/lib/watch"
@@ -97,5 +98,9 @@ func (r liveMigrations) List(ctx context.Context, opts options.ListOptions) (*in
 // Watch returns a watch.Interface that watches the LiveMigrations that match the
 // supplied options.
 func (r liveMigrations) Watch(ctx context.Context, opts options.ListOptions) (watch.Interface, error) {
-	return r.client.resources.Watch(ctx, opts, internalapi.KindLiveMigration, nil)
+	return nil, cerrors.ErrorOperationNotSupported{
+		Operation:  "Watch",
+		Identifier: internalapi.KindLiveMigration,
+		Reason:     "Watch is not supported for LiveMigration resources",
+	}
 }
