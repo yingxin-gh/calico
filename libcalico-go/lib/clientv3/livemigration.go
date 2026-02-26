@@ -98,6 +98,19 @@ func (r liveMigrations) List(ctx context.Context, opts options.ListOptions) (*in
 // Watch returns a watch.Interface that watches the LiveMigrations that match the
 // supplied options.
 func (r liveMigrations) Watch(ctx context.Context, opts options.ListOptions) (watch.Interface, error) {
+	// In Kubernetes, where a LiveMigration resource doesn't have its own storage but is instead
+	// backed by the KubeVirt VirtualMachineInstanceMigration (VMIM) resource with the same name
+	// and namespace, we have implemented the conversion such that the emitted LiveMigration KV
+	// pair has `Value == nil` when the VirtualMachineInstanceMigration is in a state that Felix
+	// can treat equivalently to the LiveMigration not existing.  Typha and Felix handle this
+	// well, i.e. as though the LiveMigration has been deleted.  (And correspondingly, if the
+	// VMIM then transitions to a state of interest, as though the LiveMigration has been
+	// created again.)
+	//
+	// However the v3 API Watch machinery does not currently handle `Value == nil`.
+	// Specifically, `convertEvent` calls `w.client.kvPairToResource(backendEvent.New)`, and
+	// `kvPairToResource` will panic in that case.  Hence we document and firewall against this
+	// here.
 	return nil, cerrors.ErrorOperationNotSupported{
 		Operation:  "Watch",
 		Identifier: internalapi.KindLiveMigration,
